@@ -1,0 +1,250 @@
+  #include <Wire.h> 
+  #include <Adafruit_MLX90614.h>
+  #include <MPU6050.h>
+  #define PI 3.1415926535897932384626433832795
+  #include <WiFi.h>
+  #include <PubSubClient.h>
+  
+  
+  // MQTT Stuff
+  const char *ssid = "furkan"; // Enter your Wi-Fi name //FiberHGW_ZTES77_2.4GHz // Ahmetin evinde: SUPERONLINE_WiFi_C3A4 sifre: RXENRVLM9JMP
+  const char *password = "tuetue2023";  // Enter Wi-Fi password //EtgKcK9ATd
+  
+  // MQTT Broker
+  const char *mqtt_broker = "broker.emqx.io";
+  const char *topic_movement = "movement";
+  const char *topic_temperature = "temperature";
+  const char *mqtt_username = "emqx";
+  const char *mqtt_password = "public";
+  const int mqtt_port = 1883;
+  
+  WiFiClient espClient;
+  PubSubClient client(espClient);
+  
+  
+  const float CALIBRATION_OFFSET = 5.5;  // Adjust based on empirical observations
+  //const float HUMAN_MIN_TEMP_C = 35.0;   // Reasonable minimum temperature
+  //const float HUMAN_MAX_TEMP_C = 42.0;   // Reasonable maximum temperature
+  
+  // Define I2C addresses
+  #define MLX90614_I2C_ADDR 0x5A  // MLX90614 I2C address
+  const int MPU_addr=0x68; //MPU6050 I2C address
+  
+  Adafruit_MLX90614 mlx = Adafruit_MLX90614(); // Initialize the MLX90614 sensor object
+  
+  // MPU6050 variables
+  int16_t AcX, AcY, AcZ;
+  int minVal = 265;
+  int maxVal = 402;
+  int count = 0;
+  int j = 0;
+  int movement = 0;
+  int counter;
+  int dummy;
+  double x, y, z;
+  double initx, inity, initz, tempx, tempy, tempz;
+  double initialx, initialy, initialz;
+  double savex, savey, savez, lastanglex, lastangley,lastanglez;
+  double resx, resy, resz;
+  double angledifx, angledify;
+  unsigned long previousMillis = 0;  // Stores last time the message was printed
+  unsigned long currentMillis;
+  const long interval = 1000;       // Interval at which to print message (milliseconds)
+  double TempOffset = 4.1;
+  
+  // Define temperature thresholds for a baby's arm
+  
+  // Number of readings to average
+  const int NUM_READINGS = 5;
+  
+  // Arrays to store previous readings
+  float ambientReadings[NUM_READINGS];
+  float objectReadings[NUM_READINGS];
+  int currentIndex = 0;
+  
+  void setup() {
+    Wire.begin();
+    Wire.beginTransmission(MPU_addr);
+    Wire.write(0x6B);
+    Wire.write(0);
+    Wire.endTransmission(true);
+    Serial.begin(115200);
+    while (!Serial);
+  
+
+  
+    // Initialize the sensor and check for errors
+    if (!mlx.begin()) {
+      
+    }
+  
+    WiFi.begin(ssid, password);
+      while (WiFi.status() != WL_CONNECTED) {
+          delay(500);
+
+      }
+
+      //connecting to a mqtt broker
+      client.setServer(mqtt_broker, mqtt_port);
+  
+      while (!client.connected()) {
+          String client_id = "esp32-client-";
+          client_id += String(WiFi.macAddress());
+
+          if (client.connect(client_id.c_str(), mqtt_username, mqtt_password)) {
+
+          } else {
+
+              delay(2000);
+          }
+      }
+  }
+  
+  void loop() {
+    // Read MPU6050 data
+    Wire.beginTransmission(MPU_addr);
+    Wire.write(0x3B);
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU_addr, 14, true);
+    AcX = Wire.read() << 8 | Wire.read();
+    AcY = Wire.read() << 8 | Wire.read();
+    AcZ = Wire.read() << 8 | Wire.read();
+    int xAng = map(AcX, minVal, maxVal, -90, 90);
+    int yAng = map(AcY, minVal, maxVal, -90, 90);
+    int zAng = map(AcZ, minVal, maxVal, -90, 90);
+  
+    // Calculate angles
+    x = RAD_TO_DEG * (atan2(-yAng, -zAng) + PI);
+    y = RAD_TO_DEG * (atan2(-xAng, -zAng) + PI);
+    z = RAD_TO_DEG * (atan2(-yAng, -xAng) + PI);
+    delay(10);
+  
+    if(count==0){
+      lastanglex=x;
+      lastangley=y;
+      lastanglez=z;
+    }
+    
+    if((x<45 || x>315) && (y<45 || y>315)){
+        client.publish(topic_movement, "sirt");
+       
+    }
+    else if( (y>45 && y<135) || (y<315 && y>225)){
+        client.publish(topic_movement, "yan");
+        
+    }
+    else if( (x>45 && x<135) || (x<315 && x>225)){
+        client.publish(topic_movement, "dik");
+       
+    }
+    else if( (x>135 && x<225) && (y>135 && y<225)){
+        client.publish(topic_movement, "yuz");
+      
+    }
+
+     if(lastanglex>335){
+        if(lastanglex-x>25){
+          movement=1;
+        }
+        else if(360-lastanglex+x>25 && x<25){
+          movement=1;
+        }
+
+     }
+     else if(lastanglex<25){
+        if(x-lastanglex>25){
+          movement=1;
+        }
+        else if(360-(25-lastanglex)>x && x>335){
+          movement=1;
+        }
+
+     }
+
+     else{
+        if(lastanglex+25<x || lastanglex-25>x){
+          movement=1;
+        }
+
+     }
+
+     if(lastangley>335){
+        if(lastangley-y>25){
+          movement=1;
+        }
+        else if(360-lastangley+y>25 && y<25){
+          movement=1;
+        }
+
+     }
+     else if(lastangley<25){
+        if(y-lastangley>25){
+          movement=1;
+        }
+        else if(360-(25-lastangley)>y && y>335){
+          movement=1;
+        }
+
+     }
+
+     else{
+        if(lastangley+25<y || lastangley-25>y){
+          movement=1;
+        }
+
+     }
+
+     if(lastanglez>315){
+        if(lastanglez-z>45){
+          movement=1;
+        }
+        else if(360-lastanglez+z>45 && z<45){
+          movement=1;
+        }
+
+     }
+     else if(lastanglez<45){
+        if(z-lastanglez>45){
+          movement=1;
+        }
+        else if(360-(45-lastanglez)>z && z>335){
+          movement=1;
+        }
+
+     }
+
+     else{
+        if(lastanglez+45<z || lastanglez-45>z){
+          movement=1;
+        }
+
+     }
+
+      count=1;
+    lastanglex=x;
+    lastangley=y;
+    lastanglez=z;
+
+
+  
+    
+ if(movement==1){
+  
+  client.publish(topic_movement, "movement");
+  delay(1000);
+  
+ }
+    currentMillis = millis();  // Get current time
+
+    if (currentMillis - previousMillis >= interval) {  // Check if the interval has passed
+    previousMillis = currentMillis;  // Save the last time you printed the message
+    client.publish(topic_temperature, String(mlx.readObjectTempC()+ TempOffset).c_str());
+    }
+  
+
+  movement=0;
+    
+    delay(500);
+  }
+  
+  
